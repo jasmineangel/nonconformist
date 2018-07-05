@@ -56,9 +56,14 @@ class BaseModelAdapter(BaseEstimator):
 		-------
 		None
 		"""
-
-		self.model.fit(x, y, **self.fit_params)
-		self.clean = False
+		try:
+			self.model.predict([[0],[1]])
+		except NotFittedError:
+			self.model.fit(x, y, **self.fit_params)
+			self.clean = False
+		except ValueError:
+		    	pass
+		
 
 	def predict(self, x):
 		"""Returns the prediction made by the underlying model.
