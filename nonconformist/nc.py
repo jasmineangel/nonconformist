@@ -221,8 +221,18 @@ class RegressorNormalizer(BaseScorer):
 		self.normalizer_model = normalizer_model
 		self.err_func = err_func
 
-	def fit(self, x, y):
-		residual_prediction = self.base_model.predict(x)
+	def fit(self, x, y, y_hat=None):
+		if self.base_model is None:
+			try:
+				if y_hat !=None:
+					pass
+				else:
+					raise InputError('y_hat is None')
+			except InputError:
+				print('y_hat cannot be None when base_model is None')
+			residual_prediction=y_hat
+		else:
+			residual_prediction = self.base_model.predict(x)
 		residual_error = np.abs(self.err_func.apply(residual_prediction, y))
 		residual_error += 0.00001 # Add small term to avoid log(0)
 		log_err = np.log(residual_error)
@@ -235,57 +245,58 @@ class RegressorNormalizer(BaseScorer):
 
 class NcFactory(object):
 	@staticmethod
-	def create_nc(model, err_func=None, normalizer_model=None, oob=False):
+	def create_nc(model=None, err_func=None, normalizer_model=None, oob=False):
 		if normalizer_model is not None:
 			normalizer_adapter = RegressorAdapter(normalizer_model)
 		else:
 			normalizer_adapter = None
-
-		if isinstance(model, sklearn.base.ClassifierMixin):
-			err_func = MarginErrFunc() if err_func is None else err_func
-			if oob:
-				c = sklearn.base.clone(model)
-				c.fit([[0], [1]], [0, 1])
-				if hasattr(c, 'oob_decision_function_'):
-					adapter = OobClassifierAdapter(model)
+		
+		if model is not None:
+			if isinstance(model, sklearn.base.ClassifierMixin):
+				err_func = MarginErrFunc() if err_func is None else err_func
+				if oob:
+					c = sklearn.base.clone(model)
+					c.fit([[0], [1]], [0, 1])
+					if hasattr(c, 'oob_decision_function_'):
+						adapter = OobClassifierAdapter(model)
+					else:
+						raise AttributeError('Cannot use out-of-bag '
+								      'calibration with {}'.format(
+							model.__class__.__name__
+						))
 				else:
-					raise AttributeError('Cannot use out-of-bag '
-					                      'calibration with {}'.format(
-						model.__class__.__name__
-					))
-			else:
-				adapter = ClassifierAdapter(model)
+					adapter = ClassifierAdapter(model)
 
-			if normalizer_adapter is not None:
-				normalizer = RegressorNormalizer(adapter,
-				                                 normalizer_adapter,
-				                                 err_func)
-				return ClassifierNc(adapter, err_func, normalizer)
-			else:
-				return ClassifierNc(adapter, err_func)
-
-		elif isinstance(model, sklearn.base.RegressorMixin):
-			err_func = AbsErrorErrFunc() if err_func is None else err_func
-			if oob:
-				c = sklearn.base.clone(model)
-				c.fit([[0], [1]], [0, 1])
-				if hasattr(c, 'oob_prediction_'):
-					adapter = OobRegressorAdapter(model)
+				if normalizer_adapter is not None:
+					normalizer = RegressorNormalizer(adapter,
+									 normalizer_adapter,
+									 err_func)
+					return ClassifierNc(adapter, err_func, normalizer)
 				else:
-					raise AttributeError('Cannot use out-of-bag '
-					                     'calibration with {}'.format(
-						model.__class__.__name__
-					))
-			else:
-				adapter = RegressorAdapter(model)
+					return ClassifierNc(adapter, err_func)
 
-			if normalizer_adapter is not None:
-				normalizer = RegressorNormalizer(adapter,
-				                                 normalizer_adapter,
-				                                 err_func)
-				return RegressorNc(adapter, err_func, normalizer)
-			else:
-				return RegressorNc(adapter, err_func)
+			elif isinstance(model, sklearn.base.RegressorMixin):
+				err_func = AbsErrorErrFunc() if err_func is None else err_func
+				if oob:
+					c = sklearn.base.clone(model)
+					c.fit([[0], [1]], [0, 1])
+					if hasattr(c, 'oob_prediction_'):
+						adapter = OobRegressorAdapter(model)
+					else:
+						raise AttributeError('Cannot use out-of-bag '
+								     'calibration with {}'.format(
+							model.__class__.__name__
+						))
+				else:
+					adapter = RegressorAdapter(model)
+
+				if normalizer_adapter is not None:
+					normalizer = RegressorNormalizer(adapter,
+									 normalizer_adapter,
+									 err_func)
+					return RegressorNc(adapter, err_func, normalizer)
+				else:
+					return RegressorNc(adapter, err_func)
 
 
 class BaseModelNc(BaseScorer):
@@ -341,12 +352,13 @@ class BaseModelNc(BaseScorer):
 		-------
 		None
 		"""
-		self.model.fit(x, y)
+		if self.model is not None:
+			self.model.fit(x, y)
 		if self.normalizer is not None:
 			self.normalizer.fit(x, y)
 		self.clean = False
 
-	def score(self, x, y=None):
+	def score(self, x, y=None,y_hat=None):
 		"""Calculates the nonconformity score of a set of samples.
 
 		Parameters
@@ -356,13 +368,27 @@ class BaseModelNc(BaseScorer):
 
 		y : numpy array of shape [n_samples]
 			Outputs of examples for which to calculate a nonconformity score.
+		
+		y_hat : numpy array of shape [n_samples]
+			Outputs of examples for which to calculate a nonconformity score when base model is not available.
 
 		Returns
 		-------
 		nc : numpy array of shape [n_samples]
 			Nonconformity scores of samples.
 		"""
-		prediction = self.model.predict(x)
+		if self.model is None:
+			try:
+				if y_hat !=None:
+					pass
+				else:
+					raise InputError('y_hat is None')
+			except InputError:
+				print('y_hat cannot be None when base_model is None')
+			residual_prediction=y_hat
+		
+		else:
+			prediction = self.model.predict(x)
 		n_test = x.shape[0]
 		if self.normalizer is not None:
 			norm = self.normalizer.score(x) + self.beta
@@ -463,7 +489,7 @@ class RegressorNc(BaseModelNc):
 		                                  normalizer,
 		                                  beta)
 
-	def predict(self, x, nc, significance=None):
+	def predict(self, x, y, nc, significance=None):
 		"""Constructs prediction intervals for a set of test examples.
 
 		Predicts the output of each test pattern using the underlying model,
@@ -474,6 +500,9 @@ class RegressorNc(BaseModelNc):
 		----------
 		x : numpy array of shape [n_samples, n_features]
 			Inputs of patters for which to predict output values.
+			
+		y : numpy array of shape [n_samples]
+			Outputs of examples from the fitted underlying model.
 
 		significance : float
 			Significance level (maximum allowed error rate) of predictions.
@@ -492,7 +521,20 @@ class RegressorNc(BaseModelNc):
 			significance level.
 		"""
 		n_test = x.shape[0]
-		prediction = self.model.predict(x)
+		
+		if self.model is None:
+			try:
+				if y !=None:
+					pass
+				else:
+					raise InputError('y is None')
+			except InputError:
+				print('y cannot be None when base_model is None')
+			prediction=y_hat
+		
+		else:
+			prediction = self.model.predict(x)
+
 		if self.normalizer is not None:
 			norm = self.normalizer.score(x) + self.beta
 		else:
